@@ -51,8 +51,8 @@ async function hmacSha256(keyBytes: Uint8Array, data: Uint8Array): Promise<Uint8
 }
 
 function getSecretBytes(): Uint8Array {
-  const secret = process.env.AUTH_SECRET || process.env.BASIC_PASSWORD;
-  if (!secret) throw new Error('AUTH_SECRET (or BASIC_PASSWORD) must be set');
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) throw new Error('AUTH_SECRET must be set');
   return textEncoder().encode(secret);
 }
 

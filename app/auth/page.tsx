@@ -19,7 +19,8 @@ function AuthInner() {
         body: JSON.stringify({ password, next }),
       });
       if (resp.ok) {
-        router.replace(next);
+        // Force a full document navigation so the fresh cookie is sent and middleware re-evaluates
+        window.location.assign(next);
       } else {
         const j = await resp.json().catch(() => null);
         setError(j?.error || 'Invalid password');
