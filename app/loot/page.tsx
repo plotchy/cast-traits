@@ -5,9 +5,8 @@ import Link from 'next/link';
 import type { CompactBatch, CompactCast } from '@/app/compact_cast_interface';
 import { isQuoteCast } from '@/app/compact_cast_interface';
 import { CastCard } from '@/app/components/CastCard';
-import { TraitGenerator } from '@/app/components/TraitGenerator';
 import type { CastTraitIndex, TraitsRegistry } from '@/lib/traits';
-import { applyTraitToAllCasts, rebuildTraitIndex, stableCastKey } from '@/lib/traits';
+import { rebuildTraitIndex, stableCastKey } from '@/lib/traits';
 import { loadTraitsFromStorage, saveTraitsToStorage, loadTraitIndexFromStorage, saveTraitIndexToStorage } from '@/lib/persistence';
 import { getDefaultTraits } from '@/lib/defaultTraits';
 
@@ -275,12 +274,7 @@ export default function LootBoxPage() {
     }
   };
 
-  const onTraitGenerated = ({ name, description, code }: { name: string; description: string; code: string }) => {
-    if (!casts) return;
-    const created_at = new Date().toISOString();
-    setTraits((t) => ({ ...t, [name]: { description, code, created_at, enabled: true } }));
-    setTraitIndex((idx) => applyTraitToAllCasts(casts, name, code, idx));
-  };
+  
 
   return (
     <div className="min-h-screen p-6 md:p-10">
@@ -290,9 +284,8 @@ export default function LootBoxPage() {
           <Link className="underline text-sm" href="/">Back to Explorer</Link>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <TraitGenerator onGenerated={onTraitGenerated} />
-          <div className="md:col-span-2">
+        <div className="grid grid-cols-1 gap-4 mb-6">
+          <div>
             <div className="flex items-center gap-3 mb-3">
               <button className="border rounded px-3 py-2" onClick={openBox} disabled={loading || !!error || !casts}>
                 {loading ? 'Loading…' : slides.length === 0 ? 'Open Box' : 'Open Box'}

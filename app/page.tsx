@@ -4,9 +4,8 @@ import type { CompactBatch, CompactCast } from '@/app/compact_cast_interface';
 import { CastCard } from '@/app/components/CastCard';
 import { searchCasts } from '@/lib/clientSearch';
 import type { SearchFilters } from '@/lib/searchTypes';
-import { TraitGenerator } from '@/app/components/TraitGenerator';
 import type { CastTraitIndex, TraitsRegistry } from '@/lib/traits';
-import { applyTraitToAllCasts, computeStatistics, rebuildTraitIndex, stableCastKey } from '@/lib/traits';
+import { computeStatistics, rebuildTraitIndex, stableCastKey } from '@/lib/traits';
 import { loadTraitsFromStorage, saveTraitsToStorage, loadTraitIndexFromStorage, saveTraitIndexToStorage } from '@/lib/persistence';
 import { getDefaultTraits } from '@/lib/defaultTraits';
 
@@ -99,12 +98,7 @@ export default function Home() {
   const [visibleCount, setVisibleCount] = useState<number>(50);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const onTraitGenerated = ({ name, description, code }: { name: string; description: string; code: string }) => {
-    if (!casts) return;
-    const created_at = new Date().toISOString();
-    setTraits((t) => ({ ...t, [name]: { description, code, created_at, enabled: true } }));
-    setTraitIndex((idx) => applyTraitToAllCasts(casts, name, code, idx));
-  };
+  
 
   // const total = search?.total ?? 0; // no longer displayed; count derived from resultsAfterTraitFilter
 
@@ -203,8 +197,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <TraitGenerator onGenerated={onTraitGenerated} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <div className="border rounded p-3">
             <div className="text-sm font-medium mb-2">Active traits</div>
             <ul className="text-sm space-y-1 max-h-64 md:max-h-80 overflow-auto pr-1">
