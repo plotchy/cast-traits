@@ -1,103 +1,340 @@
-import Image from "next/image";
+"use client";
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CompactBatch, CompactCast } from '@/app/compact_cast_interface';
+import { CastCard } from '@/app/components/CastCard';
+import { searchCasts } from '@/lib/clientSearch';
+import type { SearchFilters } from '@/lib/searchTypes';
+import { TraitGenerator } from '@/app/components/TraitGenerator';
+import type { CastTraitIndex, TraitsRegistry } from '@/lib/traits';
+import { applyTraitToAllCasts, computeStatistics, rebuildTraitIndex, stableCastKey } from '@/lib/traits';
+import { loadTraitsFromStorage, saveTraitsToStorage, loadTraitIndexFromStorage, saveTraitIndexToStorage } from '@/lib/persistence';
+import { getDefaultTraits } from '@/lib/defaultTraits';
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [casts, setCasts] = useState<CompactCast[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const [filters, setFilters] = useState<SearchFilters>({ q: '', sortBy: 'newest' });
+
+  // Trait system state
+  const [traits, setTraits] = useState<TraitsRegistry>({});
+  const [traitIndex, setTraitIndex] = useState<CastTraitIndex>({});
+  const [traitsHydrated, setTraitsHydrated] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        setLoading(true);
+        const res = await fetch('/data/casts.json');
+        const json = (await res.json()) as CompactBatch;
+        if (!cancelled) setCasts(json.casts ?? []);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message || 'Failed to load dataset');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load traits from localStorage and quickly build or hydrate index
+  useEffect(() => {
+    if (!casts) return;
+    let initial = loadTraitsFromStorage();
+    if (!initial || Object.keys(initial).length === 0) {
+      // Seed default pack on true first run only
+      initial = getDefaultTraits();
+      setTraits(initial);
+    } else {
+      setTraits(initial);
+    }
+    // Try fast path: load cached index if signatures match
+    const cached = loadTraitIndexFromStorage(casts, initial);
+    if (cached) {
+      setTraitIndex(cached);
+      setTraitsHydrated(true);
+      return;
+    }
+    // Fallback: rebuild in one pass and persist
+    const idx = rebuildTraitIndex(casts, initial);
+    setTraitIndex(idx);
+    setTraitsHydrated(true);
+    saveTraitIndexToStorage(idx, casts, initial);
+  }, [casts]);
+
+  // Persist traits on change
+  useEffect(() => {
+    if (!traitsHydrated) return; // avoid clobbering persisted data with empty state on first mount
+    saveTraitsToStorage(traits);
+  }, [traits, traitsHydrated]);
+
+  // Persist index when it changes (and we have casts + traits)
+  useEffect(() => {
+    if (!traitsHydrated) return;
+    if (!casts) return;
+    saveTraitIndexToStorage(traitIndex, casts, traits);
+  }, [traitIndex, casts, traits, traitsHydrated]);
+
+  const search = useMemo(() => {
+    if (!casts) return null;
+    return searchCasts(casts, filters);
+  }, [casts, filters]);
+
+  const stats = useMemo(() => computeStatistics(traitIndex, traits), [traitIndex, traits]);
+  const traitPercentByName = useMemo(() => {
+    if (!casts || casts.length === 0) return {} as Record<string, number>;
+    const total = casts.length;
+    const out: Record<string, number> = {};
+    for (const [name, count] of Object.entries(stats.countsByTrait)) {
+      out[name] = (count / total) * 100;
+    }
+    return out;
+  }, [casts, stats]);
+  const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
+  const [visibleCount, setVisibleCount] = useState<number>(50);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const onTraitGenerated = ({ name, description, code }: { name: string; description: string; code: string }) => {
+    if (!casts) return;
+    const created_at = new Date().toISOString();
+    setTraits((t) => ({ ...t, [name]: { description, code, created_at, enabled: true } }));
+    setTraitIndex((idx) => applyTraitToAllCasts(casts, name, code, idx));
+  };
+
+  // const total = search?.total ?? 0; // no longer displayed; count derived from resultsAfterTraitFilter
+
+  const resultsAfterTraitFilter = useMemo(() => {
+    const list = search?.results ?? [];
+    if (selectedTraits.length === 0) return list;
+    const enabledSelected = selectedTraits.filter((t) => traits[t]?.enabled !== false);
+    const mustHave = new Set(enabledSelected);
+    if (mustHave.size === 0) return list;
+    return list.filter((c) => {
+      const tNames = new Set(traitIndex[stableCastKey(c)] ?? []);
+      for (const t of mustHave) if (!tNames.has(t)) return false;
+      return true;
+    });
+  }, [search, selectedTraits, traitIndex, traits]);
+
+  // Reset windowed rendering on data/filter changes
+  const windowResetDeps = `${filters.q}|${filters.hasImage}|${filters.hasLink}|${filters.isQuote}|${filters.sortBy}|${casts ? casts.length : 0}|${selectedTraits.sort().join(',')}`;
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [windowResetDeps]);
+
+  // Infinite scroll sentinel
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return;
+    let ticking = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting && !ticking) {
+          ticking = true;
+          setVisibleCount((c) => c + 50);
+          // allow next tick to schedule again
+          setTimeout(() => {
+            ticking = false;
+          }, 100);
+        }
+      },
+      { rootMargin: '1000px 0px 1000px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [sentinelRef]);
+
+  return (
+    <div className="min-h-screen p-6 md:p-10">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-semibold">Cast Trait Explorer</h1>
+          <a className="underline text-sm" href="/loot">Loot Box</a>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
+          <input
+            type="text"
+            placeholder="Search text..."
+            className="border rounded px-3 py-2 md:col-span-2"
+            value={filters.q ?? ''}
+            onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value, offset: 0 }))}
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          <select
+            className="border rounded px-3 py-2"
+            value={filters.sortBy ?? 'newest'}
+            onChange={(e) => setFilters((f) => ({ ...f, sortBy: e.target.value as SearchFilters['sortBy'] }))}
+          >
+            <option value="newest">Newest</option>
+            <option value="likes">Likes</option>
+            <option value="replies">Replies</option>
+          </select>
+          <div className="flex items-center gap-3">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.hasImage)}
+                onChange={(e) => setFilters((f) => ({ ...f, hasImage: e.target.checked || undefined, offset: 0 }))}
+              />
+              <span>Images</span>
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.hasLink)}
+                onChange={(e) => setFilters((f) => ({ ...f, hasLink: e.target.checked || undefined, offset: 0 }))}
+              />
+              <span>Links</span>
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.isQuote)}
+                onChange={(e) => setFilters((f) => ({ ...f, isQuote: e.target.checked || undefined, offset: 0 }))}
+              />
+              <span>Quotes</span>
+            </label>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <TraitGenerator onGenerated={onTraitGenerated} />
+          <div className="border rounded p-3">
+            <div className="text-sm font-medium mb-2">Active traits</div>
+            <ul className="text-sm space-y-1 max-h-64 md:max-h-80 overflow-auto pr-1">
+              {Object.entries(traits).length === 0 && <li className="opacity-70">None yet</li>}
+              {Object.entries(traits)
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([name, def]) => (
+                  <li key={name} className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-mono text-xs">{name}</div>
+                      <div className="text-xs opacity-80 break-words max-w-[28rem]">{def.description}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="text-xs border rounded px-2 py-1"
+                        title={def.enabled === false ? 'Enable' : 'Disable'}
+                        onClick={() =>
+                          setTraits((t) => ({
+                            ...t,
+                            [name]: { ...t[name], enabled: t[name].enabled === false ? true : false },
+                          }))
+                        }
+                      >
+                        {def.enabled === false ? '👁️‍🗨️ Show' : '🙈 Hide'}
+                      </button>
+                      <button
+                        className="text-xs border rounded px-2 py-1"
+                        title="Delete trait"
+                        onClick={() => {
+                          setTraits((t) => {
+                            const nt = { ...t };
+                            delete nt[name];
+                            return nt;
+                          });
+                          setTraitIndex((idx) => {
+                            const nidx = { ...idx };
+                            for (const k of Object.keys(nidx)) {
+                              nidx[k] = (nidx[k] ?? []).filter((x) => x !== name);
+                            }
+                            return nidx;
+                          });
+                          setSelectedTraits((cur) => cur.filter((x) => x !== name));
+                        }}
+                      >
+                        🗑️ Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          </div>
+          {/* Stats */}
+          {casts && (
+            <div className="border rounded p-3">
+              <div className="text-sm font-medium mb-2">Stats</div>
+              <div className="text-sm flex flex-wrap gap-3 mb-2">
+                <span>Total casts: {casts.length}</span>
+                <span>0 traits: {stats.distribution[0]}</span>
+                <span>1 trait: {stats.distribution[1]}</span>
+                <span>2 traits: {stats.distribution[2]}</span>
+                <span>3+ traits: {stats.distribution['3+']}</span>
+              </div>
+              <div className="text-xs grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-40 overflow-auto">
+                {Object.entries(stats.countsByTrait)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([t, c]) => {
+                    const active = selectedTraits.includes(t);
+                    return (
+                      <button
+                        key={t}
+                        className={`flex items-center justify-between border rounded px-2 py-1 text-left ${
+                          active ? 'bg-black/5 dark:bg-white/10' : ''
+                        }`}
+                        onClick={() =>
+                          setSelectedTraits((cur) =>
+                            cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]
+                          )
+                        }
+                      >
+                        <span className="font-mono">{t}</span>
+                        <span>{c}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+              {selectedTraits.length > 0 && (
+                <div className="mt-2 text-xs">
+                  Filtering by traits:{' '}
+                  {selectedTraits.map((t) => (
+                    <span key={t} className="font-mono mr-1">
+                      {t}
+                    </span>
+                  ))}
+                  <button className="ml-2 underline" onClick={() => setSelectedTraits([])}>
+                    clear all
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="text-sm mb-4">
+          {loading && <span>Loading…</span>}
+          {error && <span className="text-red-600">{error}</span>}
+          {!loading && !error && <span>Total: {resultsAfterTraitFilter.length}</span>}
+        </div>
+
+        {/* Facets removed per TODO */}
+
+        <div className="grid grid-cols-1 gap-3">
+          {resultsAfterTraitFilter.slice(0, visibleCount).map((cast) => {
+            const key = stableCastKey(cast);
+            const traitsForCast = (traitIndex[key] ?? []).filter((t) => traits[t]?.enabled !== false);
+            return (
+              <CastCard
+                key={key}
+                cast={cast}
+                castKey={key}
+                traitNames={traitsForCast}
+                traitPercentByName={traitPercentByName}
+                onTraitClick={(t) =>
+                  setSelectedTraits((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))
+                }
+              />
+            );
+          })}
+          <div ref={sentinelRef} />
+        </div>
+      </div>
     </div>
   );
 }
