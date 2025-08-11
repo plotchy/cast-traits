@@ -7,11 +7,10 @@ const COOKIE_NAME = 'cte_auth';
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Always allow these paths
-  const allow =
+  // Always allow these paths without even touching auth
+  const alwaysAllow =
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/api/auth/') ||
-    pathname.startsWith('/auth') ||
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/vercel.svg') ||
     pathname.startsWith('/next.svg') ||
@@ -20,17 +19,26 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/globe.svg') ||
     pathname.startsWith('/data/');
 
-  const token = req.cookies.get(COOKIE_NAME)?.value;
-  const hasAuth = await verifyAuthToken(token);
+  if (alwaysAllow) return NextResponse.next();
 
-  // If already authed and on /auth, redirect to home
-  if (hasAuth && pathname === '/auth') {
-    const url = req.nextUrl.clone();
-    url.pathname = '/';
-    return NextResponse.redirect(url);
+  const token = req.cookies.get(COOKIE_NAME)?.value;
+  let hasAuth = false;
+  try {
+    hasAuth = await verifyAuthToken(token);
+  } catch {
+    // Treat as unauthenticated if verification throws (e.g., missing env)
+    hasAuth = false;
   }
 
-  if (allow) return NextResponse.next();
+  // If on /auth, redirect to home when already authed; otherwise allow page load
+  if (pathname === '/auth') {
+    if (hasAuth) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/';
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
 
   if (!hasAuth) {
     const url = req.nextUrl.clone();
@@ -43,7 +51,7 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/auth).*)'],
 };
 
 
